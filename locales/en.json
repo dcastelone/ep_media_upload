@@ -1,0 +1,12 @@
+{
+  "ep_media_upload.toolbar.upload.title": "Upload File",
+  "ep_media_upload.error.title": "Upload Error",
+  "ep_media_upload.error.fileType": "File type not allowed.",
+  "ep_media_upload.error.fileSize": "File is too large. Maximum size is {{maxallowed}} MB.",
+  "ep_media_upload.error.uploadFailed": "Upload failed. Please try again.",
+  "ep_media_upload.error.networkError": "Network error. Please check your connection.",
+  "ep_media_upload.status.uploading": "Uploading...",
+  "ep_media_upload.status.success": "Upload complete!",
+  "ep_media_upload.button.close": "Close"
+}
+

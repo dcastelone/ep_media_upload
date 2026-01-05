@@ -1,0 +1,39 @@
+{
+  "name": "ep_media_upload",
+  "description": "Upload files to S3 and insert hyperlinks into the pad. Compatible with ep_hyperlinked_text.",
+  "version": "0.1.0",
+  "author": {
+    "name": "DCastelone",
+    "url": "https://github.com/dcastelone"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.555.0",
+    "@aws-sdk/s3-request-presigner": "^3.555.0"
+  },
+  "peerDependencies": {
+    "ep_etherpad-lite": ">=1.8.6"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "etherpad",
+    "plugin",
+    "ep",
+    "media",
+    "upload",
+    "s3",
+    "file",
+    "attachment"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dcastelone/ep_media_upload"
+  },
+  "bugs": {
+    "url": "https://github.com/dcastelone/ep_media_upload/issues"
+  },
+  "homepage": "https://github.com/dcastelone/ep_media_upload"
+}
+

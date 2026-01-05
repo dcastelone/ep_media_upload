@@ -1,0 +1,115 @@
+/* ep_media_upload Modal Styles */
+
+.ep-media-upload-modal {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 10000;
+  justify-content: center;
+  align-items: center;
+}
+
+.ep-media-upload-modal.visible {
+  display: flex;
+}
+
+.ep-media-upload-modal-content {
+  background: #fff;
+  border-radius: 8px;
+  padding: 32px 48px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  text-align: center;
+  min-width: 280px;
+  max-width: 400px;
+}
+
+.ep-media-upload-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+/* Spinner */
+.ep-media-upload-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #e0e0e0;
+  border-top-color: #1a73e8;
+  border-radius: 50%;
+  animation: ep-media-upload-spin 1s linear infinite;
+}
+
+@keyframes ep-media-upload-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Icons */
+.ep-media-upload-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: bold;
+}
+
+.ep-media-upload-icon-success {
+  background-color: #e6f4ea;
+  color: #1e8e3e;
+}
+
+.ep-media-upload-icon-error {
+  background-color: #fce8e6;
+  color: #d93025;
+}
+
+/* Message text */
+.ep-media-upload-message {
+  margin: 0;
+  font-size: 16px;
+  color: #202124;
+  font-weight: 500;
+}
+
+.ep-media-upload-error-text {
+  color: #d93025;
+}
+
+/* Button */
+.ep-media-upload-btn {
+  margin-top: 8px;
+  padding: 8px 24px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #fff;
+  background-color: #1a73e8;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.ep-media-upload-btn:hover {
+  background-color: #1557b0;
+}
+
+.ep-media-upload-btn:focus {
+  outline: 2px solid #1a73e8;
+  outline-offset: 2px;
+}
+
+/* Toolbar button icon - paperclip */
+.buttonicon-attachment::before {
+  content: "📎";
+  font-size: 16px;
+}
+
