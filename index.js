@@ -8,6 +8,14 @@ const { randomUUID } = require('crypto');
 const path = require('path');
 const url = require('url');
 
+// Security Manager for pad access verification
+let securityManager;
+try {
+  securityManager = require('ep_etherpad-lite/node/db/SecurityManager');
+} catch (e) {
+  console.warn('[ep_media_upload] SecurityManager not available');
+}
+
 // AWS SDK v3 for presigned URLs
 let S3Client, PutObjectCommand, getSignedUrl;
 try {
@@ -25,10 +33,26 @@ const logger = {
   error: console.error.bind(console),
 };
 
-// Simple in-memory IP rate limiter
+// ============================================================================
+// Rate Limiter with Periodic Cleanup
+// ============================================================================
 const _presignRateStore = new Map();
 const PRESIGN_RATE_WINDOW_MS = 60 * 1000;   // 1 minute
 const PRESIGN_RATE_MAX = 30;                // max 30 presigns per IP per min
+const RATE_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // cleanup every 5 minutes
+
+// Periodic cleanup to prevent memory leak from stale IPs
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, stamps] of _presignRateStore.entries()) {
+    const validStamps = stamps.filter((t) => t > now - PRESIGN_RATE_WINDOW_MS);
+    if (validStamps.length === 0) {
+      _presignRateStore.delete(ip);
+    } else {
+      _presignRateStore.set(ip, validStamps);
+    }
+  }
+}, RATE_CLEANUP_INTERVAL_MS).unref(); // unref() so it doesn't prevent process exit
 
 // Utility: basic per-IP sliding-window rate limit
 const _rateLimitCheck = (ip) => {
@@ -40,6 +64,41 @@ const _rateLimitCheck = (ip) => {
   _presignRateStore.set(ip, stamps);
   return true;
 };
+
+// ============================================================================
+// Input Validation Helpers
+// ============================================================================
+
+/**
+ * Validate padId to prevent path traversal and injection attacks.
+ * Returns true if valid, false if invalid.
+ */
+const isValidPadId = (padId) => {
+  if (!padId || typeof padId !== 'string') return false;
+  // Reject path traversal sequences
+  if (padId.includes('..')) return false;
+  // Reject null bytes
+  if (padId.includes('\0')) return false;
+  // Allow alphanumeric, hyphens, underscores, and $ (for group pads)
+  // This is permissive but still prevents dangerous characters
+  const safePattern = /^[a-zA-Z0-9_\-$]+$/;
+  return safePattern.test(padId);
+};
+
+/**
+ * Validate filename extension.
+ * Returns the extension (without dot, lowercase) or null if invalid.
+ */
+const getValidExtension = (filename) => {
+  if (!filename || typeof filename !== 'string') return null;
+  const ext = path.extname(filename);
+  if (!ext || ext === '.') return null; // No extension or just a dot
+  return ext.slice(1).toLowerCase(); // Remove leading dot
+};
+
+// ============================================================================
+// Hooks
+// ============================================================================
 
 /**
  * loadSettings hook
@@ -113,11 +172,36 @@ exports.expressConfigure = (hookName, context) => {
 
   // Route: GET /p/:padId/pluginfw/ep_media_upload/s3_presign
   context.app.get('/p/:padId/pluginfw/ep_media_upload/s3_presign', async (req, res) => {
-    /* ------------------ Basic auth check ------------------ */
-    const hasExpressSession = req.session && (req.session.user || req.session.authorId);
-    const hasPadCookie = req.cookies && (req.cookies.sessionID || req.cookies.token);
-    if (!hasExpressSession && !hasPadCookie) {
-      return res.status(401).json({ error: 'Authentication required' });
+    const { padId } = req.params;
+
+    /* ------------------ Validate padId ------------------ */
+    if (!isValidPadId(padId)) {
+      return res.status(400).json({ error: 'Invalid pad ID' });
+    }
+
+    /* ------------------ Pad Access Verification ------------------ */
+    // Use Etherpad's SecurityManager to verify user has access to this pad
+    if (securityManager) {
+      try {
+        const sessionCookie = req.cookies?.sessionID || null;
+        const token = req.cookies?.token || null;
+        const user = req.session?.user || null;
+
+        const accessResult = await securityManager.checkAccess(padId, sessionCookie, token, user);
+        if (accessResult.accessStatus !== 'grant') {
+          return res.status(403).json({ error: 'Access denied to this pad' });
+        }
+      } catch (authErr) {
+        logger.error('[ep_media_upload] Access check error:', authErr);
+        return res.status(500).json({ error: 'Access verification failed' });
+      }
+    } else {
+      // Fallback: basic cookie check if SecurityManager unavailable
+      const hasExpressSession = req.session && (req.session.user || req.session.authorId);
+      const hasPadCookie = req.cookies && (req.cookies.sessionID || req.cookies.token);
+      if (!hasExpressSession && !hasPadCookie) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
     }
 
     /* ------------------ Rate limiting --------------------- */
@@ -141,26 +225,28 @@ exports.expressConfigure = (hookName, context) => {
         return res.status(500).json({ error: 'Invalid S3 configuration: missing bucket or region' });
       }
 
-      const { padId } = req.params;
       const { name, type } = req.query;
       if (!name || !type) {
         return res.status(400).json({ error: 'Missing name or type query parameters' });
       }
 
+      /* ------------- Extension validation ------------ */
+      const extName = getValidExtension(name);
+      if (!extName) {
+        return res.status(400).json({ error: 'Invalid filename: missing extension' });
+      }
+
       /* ------------- Extension allow-list ------------ */
       if (settings.ep_media_upload && settings.ep_media_upload.fileTypes && Array.isArray(settings.ep_media_upload.fileTypes)) {
         const allowedExts = settings.ep_media_upload.fileTypes;
-        const extName = path.extname(name).replace('.', '').toLowerCase();
         if (!allowedExts.includes(extName)) {
           return res.status(400).json({ error: 'File type not allowed' });
         }
       }
 
-      const ext = path.extname(name);
-      const safeExt = ext.startsWith('.') ? ext : `.${ext}`;
-
       // Build S3 key with optional prefix for path-based routing (e.g., CloudFront origins)
       const prefix = keyPrefix || '';
+      const safeExt = `.${extName}`;
       const objectPath = `${padId}/${randomUUID()}${safeExt}`;  // e.g., "myPad/abc123.pdf"
       const key = `${prefix}${objectPath}`;                     // e.g., "uploads/myPad/abc123.pdf"
 
@@ -192,4 +278,3 @@ exports.expressConfigure = (hookName, context) => {
     }
   });
 };
-

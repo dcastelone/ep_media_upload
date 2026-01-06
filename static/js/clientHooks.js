@@ -60,11 +60,15 @@ const showSuccess = () => {
  */
 const validateFile = (file) => {
   const config = clientVars.ep_media_upload || {};
-  const errorTitle = html10n.get('ep_media_upload.error.title') || 'Upload Error';
 
   // Check file type
   if (config.fileTypes && Array.isArray(config.fileTypes)) {
-    const ext = file.name.split('.').pop().toLowerCase();
+    const nameParts = file.name.split('.');
+    if (nameParts.length < 2) {
+      const errorMsg = html10n.get('ep_media_upload.error.fileType') || 'File type not allowed.';
+      return { valid: false, error: `${errorMsg} File must have an extension.` };
+    }
+    const ext = nameParts.pop().toLowerCase();
     if (!config.fileTypes.includes(ext)) {
       const allowedTypes = config.fileTypes.join(', ');
       const errorMsg = html10n.get('ep_media_upload.error.fileType') || 'File type not allowed.';
@@ -90,7 +94,7 @@ const uploadToS3 = async (file) => {
   // Step 1: Get presigned URL from server
   const queryParams = $.param({ name: file.name, type: file.type });
   const presignResponse = await $.getJSON(
-    `${clientVars.padId}/pluginfw/ep_media_upload/s3_presign?${queryParams}`
+    `${encodeURIComponent(clientVars.padId)}/pluginfw/ep_media_upload/s3_presign?${queryParams}`
   );
 
   if (!presignResponse || !presignResponse.signedUrl || !presignResponse.publicUrl) {
@@ -214,7 +218,7 @@ exports.postToolbarInit = (hook, context) => {
   const toolbar = context.toolbar;
 
   toolbar.registerCommand('mediaUpload', () => {
-    // Remove any existing file input
+    // Remove any existing file input (cleanup from previous attempts)
     $('#mediaUploadFileInput').remove();
 
     // Create hidden file input
@@ -235,18 +239,34 @@ exports.postToolbarInit = (hook, context) => {
 
     $('body').append(fileInput);
 
-    // Handle file selection
-    fileInput.on('change', (e) => {
+    // Cleanup function to remove file input
+    const cleanup = () => {
+      fileInput.off(); // Remove all event handlers
+      fileInput.remove();
+    };
+
+    // Handle file selection - use 'one' so it only fires once
+    fileInput.one('change', (e) => {
       const files = e.target.files;
       if (!files || files.length === 0) {
+        cleanup();
         return;
       }
 
       const file = files[0];
       handleFileUpload(file, context.ace);
+      cleanup();
+    });
 
-      // Clean up file input
-      fileInput.remove();
+    // Handle cancel (user closes file picker without selecting)
+    // The blur/focus trick: when file picker closes, window regains focus
+    $(window).one('focus', () => {
+      // Small delay to allow change event to fire first if file was selected
+      setTimeout(() => {
+        if ($('#mediaUploadFileInput').length > 0) {
+          cleanup();
+        }
+      }, 300);
     });
 
     // Trigger file picker
@@ -255,4 +275,3 @@ exports.postToolbarInit = (hook, context) => {
 
   console.log('[ep_media_upload] Toolbar command registered');
 };
-
