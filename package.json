@@ -1,6 +1,6 @@
 {
   "name": "ep_media_upload",
-  "description": "Upload files to S3 and insert hyperlinks into the pad. Compatible with ep_hyperlinked_text.",
+  "description": "beta - Upload files to S3 and insert hyperlinks into the pad. Compatible with ep_hyperlinked_text.",
   "version": "0.1.0",
   "author": {
     "name": "DCastelone",

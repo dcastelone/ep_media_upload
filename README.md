@@ -1,4 +1,4 @@
-# ep_media_upload – Etherpad Media Upload Plugin
+# ep_media_upload – BETA: Etherpad Media Upload Plugin
 
 ## Overview
 
@@ -52,11 +52,34 @@ A lightweight Etherpad plugin that adds file upload capability via an S3 presign
     "type": "s3_presigned",       // Only supported type
     "region": "us-east-1",        // AWS region
     "bucket": "my-bucket-name",   // S3 bucket name
-    "publicURL": "https://cdn.example.com/",  // Optional CDN URL prefix
+    "keyPrefix": "uploads/",      // Optional S3 key prefix (for CloudFront path-based routing)
+    "publicURL": "https://cdn.example.com/uploads/",  // Optional CDN URL (should include prefix if using keyPrefix)
     "expires": 900                // Presigned URL expiry in seconds (default 600)
   },
   "fileTypes": ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "mp3", "mp4", "wav", "mov", "zip", "txt"],
   "maxFileSize": 52428800         // 50 MB in bytes
+}
+```
+
+### Storage Options Explained
+
+| Option | Description |
+|--------|-------------|
+| `type` | Must be `"s3_presigned"` (only supported storage type) |
+| `region` | AWS region (e.g., `"us-east-1"`) |
+| `bucket` | S3 bucket name |
+| `keyPrefix` | Optional prefix for S3 keys (e.g., `"uploads/"` → keys become `uploads/padId/uuid.ext`) |
+| `publicURL` | Optional CDN/custom URL base. If using `keyPrefix`, include it in this URL. |
+| `expires` | Presigned URL expiry in seconds (default: 600) |
+
+**Example with CloudFront path-based routing:**
+```jsonc
+"storage": {
+  "type": "s3_presigned",
+  "region": "us-east-1",
+  "bucket": "my-bucket",
+  "keyPrefix": "uploads/",                              // S3 key: uploads/padId/uuid.pdf
+  "publicURL": "https://d123.cloudfront.net/uploads/"   // Public URL includes prefix
 }
 ```
 

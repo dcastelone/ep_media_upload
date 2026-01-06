@@ -96,6 +96,73 @@ const getValidExtension = (filename) => {
   return ext.slice(1).toLowerCase(); // Remove leading dot
 };
 
+/**
+ * MIME type to extension mapping for validation.
+ * Maps file extensions to their valid MIME types.
+ */
+const EXTENSION_MIME_MAP = {
+  // Documents
+  pdf: ['application/pdf'],
+  doc: ['application/msword'],
+  docx: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  xls: ['application/vnd.ms-excel'],
+  xlsx: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+  ppt: ['application/vnd.ms-powerpoint'],
+  pptx: ['application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+  txt: ['text/plain'],
+  rtf: ['application/rtf', 'text/rtf'],
+  csv: ['text/csv', 'text/plain', 'application/csv'],
+  
+  // Images
+  jpg: ['image/jpeg'],
+  jpeg: ['image/jpeg'],
+  png: ['image/png'],
+  gif: ['image/gif'],
+  webp: ['image/webp'],
+  bmp: ['image/bmp'],
+  svg: ['image/svg+xml'],
+  
+  // Audio
+  mp3: ['audio/mpeg', 'audio/mp3'],
+  wav: ['audio/wav', 'audio/wave', 'audio/x-wav'],
+  ogg: ['audio/ogg'],
+  m4a: ['audio/mp4', 'audio/x-m4a'],
+  flac: ['audio/flac'],
+  
+  // Video
+  mp4: ['video/mp4'],
+  mov: ['video/quicktime'],
+  avi: ['video/x-msvideo'],
+  mkv: ['video/x-matroska'],
+  webm: ['video/webm'],
+  
+  // Archives
+  zip: ['application/zip', 'application/x-zip-compressed'],
+  rar: ['application/vnd.rar', 'application/x-rar-compressed'],
+  '7z': ['application/x-7z-compressed'],
+  tar: ['application/x-tar'],
+  gz: ['application/gzip', 'application/x-gzip'],
+};
+
+/**
+ * Validate that the MIME type matches the file extension.
+ * Returns true if valid, false if mismatch detected.
+ * If extension is not in our map, we allow it (permissive for unknown types).
+ */
+const isValidMimeForExtension = (extension, mimeType) => {
+  if (!extension || !mimeType) return false;
+  
+  const allowedMimes = EXTENSION_MIME_MAP[extension.toLowerCase()];
+  
+  // If we don't have a mapping for this extension, allow any MIME type
+  // (permissive approach for uncommon file types)
+  if (!allowedMimes) return true;
+  
+  // Check if the provided MIME type matches any allowed MIME for this extension
+  const normalizedMime = mimeType.toLowerCase().split(';')[0].trim(); // Handle "text/plain; charset=utf-8"
+  return allowedMimes.some(allowed => allowed === normalizedMime);
+};
+
 // ============================================================================
 // Hooks
 // ============================================================================
@@ -244,6 +311,13 @@ exports.expressConfigure = (hookName, context) => {
         }
       }
 
+      /* ------------- MIME type validation ------------ */
+      // Prevent MIME type spoofing (e.g., uploading .txt with Content-Type: text/html)
+      if (!isValidMimeForExtension(extName, type)) {
+        logger.warn(`[ep_media_upload] MIME mismatch: ext=${extName}, type=${type}`);
+        return res.status(400).json({ error: 'MIME type does not match file extension' });
+      }
+
       // Build S3 key with optional prefix for path-based routing (e.g., CloudFront origins)
       const prefix = keyPrefix || '';
       const safeExt = `.${extName}`;
@@ -252,10 +326,17 @@ exports.expressConfigure = (hookName, context) => {
 
       const s3Client = new S3Client({ region }); // credentials from env / IAM role
 
+      // Extract original filename for Content-Disposition header
+      // This ensures files download with their original name instead of the UUID
+      const originalFilename = path.basename(name);
+      const safeFilename = originalFilename.replace(/[^\w\-_.]/g, '_'); // Sanitize for header
+
       const putCommand = new PutObjectCommand({
         Bucket: bucket,
         Key: key,
         ContentType: type,
+        // Force download instead of opening in browser
+        ContentDisposition: `attachment; filename="${safeFilename}"`,
       });
 
       const signedUrl = await getSignedUrl(s3Client, putCommand, { expiresIn: expires || 600 });
