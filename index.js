@@ -72,17 +72,26 @@ const _rateLimitCheck = (ip) => {
 /**
  * Validate padId to prevent path traversal and injection attacks.
  * Returns true if valid, false if invalid.
+ * 
+ * Etherpad pad IDs can contain various characters including:
+ * - Alphanumeric, hyphens, underscores
+ * - Dots and colons (common in pad names)
+ * - $ (for group pads, e.g., g.xxxxxxxx$padName)
+ * 
+ * We use a blocklist approach to reject only dangerous patterns.
  */
 const isValidPadId = (padId) => {
   if (!padId || typeof padId !== 'string') return false;
+  if (padId.length === 0 || padId.length > 500) return false; // Reasonable length limits
   // Reject path traversal sequences
   if (padId.includes('..')) return false;
   // Reject null bytes
   if (padId.includes('\0')) return false;
-  // Allow alphanumeric, hyphens, underscores, and $ (for group pads)
-  // This is permissive but still prevents dangerous characters
-  const safePattern = /^[a-zA-Z0-9_\-$]+$/;
-  return safePattern.test(padId);
+  // Reject slashes (forward and back) to prevent path manipulation
+  if (padId.includes('/') || padId.includes('\\')) return false;
+  // Reject control characters (ASCII 0-31)
+  if (/[\x00-\x1f]/.test(padId)) return false;
+  return true;
 };
 
 /**
@@ -330,13 +339,14 @@ exports.expressConfigure = (hookName, context) => {
       // This ensures files download with their original name instead of the UUID
       const originalFilename = path.basename(name);
       const safeFilename = originalFilename.replace(/[^\w\-_.]/g, '_'); // Sanitize for header
+      const contentDisposition = `attachment; filename="${safeFilename}"`;
 
       const putCommand = new PutObjectCommand({
         Bucket: bucket,
         Key: key,
         ContentType: type,
         // Force download instead of opening in browser
-        ContentDisposition: `attachment; filename="${safeFilename}"`,
+        ContentDisposition: contentDisposition,
       });
 
       const signedUrl = await getSignedUrl(s3Client, putCommand, { expiresIn: expires || 600 });
@@ -352,7 +362,14 @@ exports.expressConfigure = (hookName, context) => {
         publicUrl = new url.URL(key, s3Base).toString();
       }
 
-      return res.json({ signedUrl, publicUrl });
+      // Log upload request for audit trail
+      // Note: Never log tokens or session cookies - only non-sensitive identifiers
+      const userId = req.session?.user?.username || req.session?.authorId || 'anonymous';
+      logger.info(`[ep_media_upload] UPLOAD: user="${userId}" pad="${padId}" file="${originalFilename}" s3key="${key}"`);
+
+      // Return contentDisposition so client can include it in the PUT request
+      // (required because it's part of the presigned URL signature)
+      return res.json({ signedUrl, publicUrl, contentDisposition });
     } catch (err) {
       logger.error('[ep_media_upload] S3 presign error', err);
       return res.status(500).json({ error: 'Failed to generate presigned URL' });

@@ -12,7 +12,8 @@
     "@aws-sdk/s3-request-presigner": "^3.555.0"
   },
   "peerDependencies": {
-    "ep_etherpad-lite": ">=1.8.6"
+    "ep_etherpad-lite": ">=1.8.6",
+    "ep_hyperlinked_text": "*"
   },
   "engines": {
     "node": ">=18.0.0"

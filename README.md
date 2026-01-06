@@ -217,7 +217,7 @@ This ensures:
 
 - **Etherpad version**: Requires >= 1.8.6 (for ESM Settings module compatibility)
 - **Node.js version**: >= 18.0.0
-- **ep_hyperlinked_text**: Fully compatible – inserted links render/export identically
+- **ep_hyperlinked_text**: **Required** – this plugin uses the `hyperlink` attribute which ep_hyperlinked_text renders as clickable links
 - **Read-only pads**: Upload button automatically hidden
 
 ---

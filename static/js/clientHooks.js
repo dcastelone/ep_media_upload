@@ -18,19 +18,15 @@ let _aceContext = null;
 const showModal = (state = 'progress') => {
   const modal = $('#mediaUploadModal');
   const progressEl = $('#mediaUploadProgress');
-  const successEl = $('#mediaUploadSuccess');
   const errorEl = $('#mediaUploadError');
 
   // Hide all states
   progressEl.hide();
-  successEl.hide();
   errorEl.hide();
 
   // Show requested state
   if (state === 'progress') {
     progressEl.show();
-  } else if (state === 'success') {
-    successEl.show();
   } else if (state === 'error') {
     errorEl.show();
   }
@@ -43,16 +39,9 @@ const hideModal = () => {
 };
 
 const showError = (message) => {
-  $('.ep-media-upload-error-text').text(message);
+  const errorText = message || 'Upload failed.';
+  $('.ep-media-upload-error-text').text(errorText);
   showModal('error');
-};
-
-const showSuccess = () => {
-  showModal('success');
-  // Auto-hide after 1.5 seconds
-  setTimeout(() => {
-    hideModal();
-  }, 1500);
 };
 
 /**
@@ -102,9 +91,15 @@ const uploadToS3 = async (file) => {
   }
 
   // Step 2: Upload directly to S3
+  // Must include Content-Disposition header as it's part of the presigned URL signature
+  const headers = { 'Content-Type': file.type };
+  if (presignResponse.contentDisposition) {
+    headers['Content-Disposition'] = presignResponse.contentDisposition;
+  }
+
   const uploadResponse = await fetch(presignResponse.signedUrl, {
     method: 'PUT',
-    headers: { 'Content-Type': file.type },
+    headers,
     body: file,
   });
 
@@ -172,12 +167,22 @@ const handleFileUpload = async (file, aceContext) => {
       ace.ace_doInsertMediaLink(publicUrl, file.name);
     }, 'insertMediaLink', true);
 
-    // Show success
-    showSuccess();
+    // Hide modal on success (no success message needed)
+    hideModal();
 
   } catch (err) {
     console.error('[ep_media_upload] Upload failed:', err);
-    const errorMsg = html10n.get('ep_media_upload.error.uploadFailed') || 'Upload failed. Please try again.';
+    // Extract error message from various error formats
+    let errorMsg = 'Upload failed.';
+    if (err.responseJSON && err.responseJSON.error) {
+      // jQuery AJAX error with JSON response
+      errorMsg = err.responseJSON.error;
+    } else if (err.message) {
+      // Standard Error object
+      errorMsg = err.message;
+    } else if (typeof err === 'string') {
+      errorMsg = err;
+    }
     showError(errorMsg);
   }
 };
