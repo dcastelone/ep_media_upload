@@ -1,7 +1,7 @@
 {
   "name": "ep_media_upload",
   "description": "beta - Upload files to S3 and insert hyperlinks into the pad. Requires ep_hyperlinked_text.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "author": {
     "name": "DCastelone",
     "url": "https://github.com/dcastelone"
