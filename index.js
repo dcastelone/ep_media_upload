@@ -281,6 +281,10 @@ exports.expressCreateServer = (hookName, context) => {
       return res.status(500).json({ error: 'Security module unavailable' });
     }
 
+    // Get client IP for rate limiting and audit logging
+    const clientIp = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || 'unknown';
+
+    let authorId = 'unknown';
     try {
       const sessionCookie = req.cookies?.sessionID || null;
       const token = req.cookies?.token || null;
@@ -288,16 +292,18 @@ exports.expressCreateServer = (hookName, context) => {
 
       const accessResult = await securityManager.checkAccess(padId, sessionCookie, token, user);
       if (accessResult.accessStatus !== 'grant') {
+        logger.warn(`[ep_media_upload] UPLOAD_DENIED: ip="${clientIp}" pad="${padId}" reason="access_denied"`);
         return res.status(403).json({ error: 'Access denied to this pad' });
       }
+      authorId = accessResult.authorID || 'unknown';
     } catch (authErr) {
       logger.error('[ep_media_upload] Access check error:', authErr);
       return res.status(500).json({ error: 'Access verification failed' });
     }
 
     /* ------------------ Rate limiting --------------------- */
-    const ip = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || 'unknown';
-    if (!_rateLimitCheck(ip)) {
+    if (!_rateLimitCheck(clientIp)) {
+      logger.warn(`[ep_media_upload] UPLOAD_RATE_LIMITED: ip="${clientIp}" pad="${padId}"`);
       return res.status(429).json({ error: 'Too many presign requests' });
     }
 
@@ -373,8 +379,8 @@ exports.expressCreateServer = (hookName, context) => {
 
       // Log upload request for audit trail
       // Note: Never log tokens or session cookies - only non-sensitive identifiers
-      const userId = req.session?.user?.username || req.session?.authorId || 'anonymous';
-      logger.info(`[ep_media_upload] UPLOAD: user="${userId}" pad="${padId}" file="${originalFilename}" s3key="${key}"`);
+      const username = req.session?.user?.username || 'anonymous';
+      logger.info(`[ep_media_upload] UPLOAD: author="${authorId}" user="${username}" ip="${clientIp}" pad="${padId}" file="${originalFilename}" s3key="${key}"`);
 
       // Return downloadUrl for hyperlink insertion (authenticated download endpoint)
       // Also return signedUrl for the actual S3 upload and contentDisposition for PUT headers
@@ -414,6 +420,10 @@ exports.expressCreateServer = (hookName, context) => {
       return res.status(500).json({ error: 'Security module unavailable' });
     }
 
+    // Get client IP for rate limiting and audit logging
+    const clientIp = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || 'unknown';
+
+    let authorId = 'unknown';
     try {
       const sessionCookie = req.cookies?.sessionID || null;
       const token = req.cookies?.token || null;
@@ -421,16 +431,18 @@ exports.expressCreateServer = (hookName, context) => {
 
       const accessResult = await securityManager.checkAccess(padId, sessionCookie, token, user);
       if (accessResult.accessStatus !== 'grant') {
+        logger.warn(`[ep_media_upload] DOWNLOAD_DENIED: ip="${clientIp}" pad="${padId}" file="${fileId}" reason="access_denied"`);
         return res.status(403).json({ error: 'Access denied to this pad' });
       }
+      authorId = accessResult.authorID || 'unknown';
     } catch (authErr) {
       logger.error('[ep_media_upload] Download access check error:', authErr);
       return res.status(500).json({ error: 'Access verification failed' });
     }
 
     /* ------------------ Rate limiting --------------------- */
-    const ip = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || 'unknown';
-    if (!_rateLimitCheck(ip)) {
+    if (!_rateLimitCheck(clientIp)) {
+      logger.warn(`[ep_media_upload] DOWNLOAD_RATE_LIMITED: ip="${clientIp}" pad="${padId}" file="${fileId}"`);
       return res.status(429).json({ error: 'Too many download requests' });
     }
 
@@ -467,8 +479,8 @@ exports.expressCreateServer = (hookName, context) => {
       const presignedGetUrl = await getSignedUrl(s3Client, getCommand, { expiresIn });
 
       // Log download request for audit trail
-      const userId = req.session?.user?.username || req.session?.authorId || 'anonymous';
-      logger.info(`[ep_media_upload] DOWNLOAD: user="${userId}" pad="${padId}" file="${fileId}"`);
+      const username = req.session?.user?.username || 'anonymous';
+      logger.info(`[ep_media_upload] DOWNLOAD: author="${authorId}" user="${username}" ip="${clientIp}" pad="${padId}" file="${fileId}"`);
 
       // Redirect to the presigned URL
       return res.redirect(302, presignedGetUrl);
