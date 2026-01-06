@@ -275,27 +275,24 @@ exports.expressCreateServer = (hookName, context) => {
 
     /* ------------------ Pad Access Verification ------------------ */
     // Use Etherpad's SecurityManager to verify user has access to this pad
-    if (securityManager) {
-      try {
-        const sessionCookie = req.cookies?.sessionID || null;
-        const token = req.cookies?.token || null;
-        const user = req.session?.user || null;
+    // SECURITY: Fail closed - if SecurityManager is unavailable, deny all requests
+    if (!securityManager) {
+      logger.error('[ep_media_upload] SECURITY: SecurityManager unavailable - denying upload request. This should not happen in a properly configured Etherpad instance.');
+      return res.status(500).json({ error: 'Security module unavailable' });
+    }
 
-        const accessResult = await securityManager.checkAccess(padId, sessionCookie, token, user);
-        if (accessResult.accessStatus !== 'grant') {
-          return res.status(403).json({ error: 'Access denied to this pad' });
-        }
-      } catch (authErr) {
-        logger.error('[ep_media_upload] Access check error:', authErr);
-        return res.status(500).json({ error: 'Access verification failed' });
+    try {
+      const sessionCookie = req.cookies?.sessionID || null;
+      const token = req.cookies?.token || null;
+      const user = req.session?.user || null;
+
+      const accessResult = await securityManager.checkAccess(padId, sessionCookie, token, user);
+      if (accessResult.accessStatus !== 'grant') {
+        return res.status(403).json({ error: 'Access denied to this pad' });
       }
-    } else {
-      // Fallback: basic cookie check if SecurityManager unavailable
-      const hasExpressSession = req.session && (req.session.user || req.session.authorId);
-      const hasPadCookie = req.cookies && (req.cookies.sessionID || req.cookies.token);
-      if (!hasExpressSession && !hasPadCookie) {
-        return res.status(401).json({ error: 'Authentication required' });
-      }
+    } catch (authErr) {
+      logger.error('[ep_media_upload] Access check error:', authErr);
+      return res.status(500).json({ error: 'Access verification failed' });
     }
 
     /* ------------------ Rate limiting --------------------- */
@@ -314,7 +311,7 @@ exports.expressCreateServer = (hookName, context) => {
         return res.status(500).json({ error: 'AWS SDK not available on server' });
       }
 
-      const { bucket, region, publicURL, expires, keyPrefix } = storageCfg;
+      const { bucket, region, expires, keyPrefix } = storageCfg;
       if (!bucket || !region) {
         return res.status(500).json({ error: 'Invalid S3 configuration: missing bucket or region' });
       }
@@ -411,27 +408,24 @@ exports.expressCreateServer = (hookName, context) => {
 
     /* ------------------ Pad Access Verification ------------------ */
     // Use Etherpad's SecurityManager to verify user has access to this pad
-    if (securityManager) {
-      try {
-        const sessionCookie = req.cookies?.sessionID || null;
-        const token = req.cookies?.token || null;
-        const user = req.session?.user || null;
+    // SECURITY: Fail closed - if SecurityManager is unavailable, deny all requests
+    if (!securityManager) {
+      logger.error('[ep_media_upload] SECURITY: SecurityManager unavailable - denying download request. This should not happen in a properly configured Etherpad instance.');
+      return res.status(500).json({ error: 'Security module unavailable' });
+    }
 
-        const accessResult = await securityManager.checkAccess(padId, sessionCookie, token, user);
-        if (accessResult.accessStatus !== 'grant') {
-          return res.status(403).json({ error: 'Access denied to this pad' });
-        }
-      } catch (authErr) {
-        logger.error('[ep_media_upload] Download access check error:', authErr);
-        return res.status(500).json({ error: 'Access verification failed' });
+    try {
+      const sessionCookie = req.cookies?.sessionID || null;
+      const token = req.cookies?.token || null;
+      const user = req.session?.user || null;
+
+      const accessResult = await securityManager.checkAccess(padId, sessionCookie, token, user);
+      if (accessResult.accessStatus !== 'grant') {
+        return res.status(403).json({ error: 'Access denied to this pad' });
       }
-    } else {
-      // Fallback: basic cookie check if SecurityManager unavailable
-      const hasExpressSession = req.session && (req.session.user || req.session.authorId);
-      const hasPadCookie = req.cookies && (req.cookies.sessionID || req.cookies.token);
-      if (!hasExpressSession && !hasPadCookie) {
-        return res.status(401).json({ error: 'Authentication required' });
-      }
+    } catch (authErr) {
+      logger.error('[ep_media_upload] Download access check error:', authErr);
+      return res.status(500).json({ error: 'Access verification failed' });
     }
 
     /* ------------------ Rate limiting --------------------- */
