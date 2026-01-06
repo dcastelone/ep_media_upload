@@ -2,7 +2,7 @@
 
 ## Overview
 
-A lightweight Etherpad plugin that adds file upload capability via an S3 presigned URL workflow. Upon successful upload, a hyperlink is inserted into the document using the same format as `ep_hyperlinked_text`, making the two plugins fully compatible.
+A lightweight Etherpad plugin that adds file upload capability via an S3 presigned URL workflow. Upon successful upload, a hyperlink is inserted into the document using the same format as `ep_hyperlinked_text`. NOTE: this currently REQUIRES ep_hyperlinked_text to work.
 
 ---
 
