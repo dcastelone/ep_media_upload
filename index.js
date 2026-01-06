@@ -136,7 +136,7 @@ exports.expressConfigure = (hookName, context) => {
         return res.status(500).json({ error: 'AWS SDK not available on server' });
       }
 
-      const { bucket, region, publicURL, expires } = storageCfg;
+      const { bucket, region, publicURL, expires, keyPrefix } = storageCfg;
       if (!bucket || !region) {
         return res.status(500).json({ error: 'Invalid S3 configuration: missing bucket or region' });
       }
@@ -158,7 +158,11 @@ exports.expressConfigure = (hookName, context) => {
 
       const ext = path.extname(name);
       const safeExt = ext.startsWith('.') ? ext : `.${ext}`;
-      const key = `${padId}/${randomUUID()}${safeExt}`;
+
+      // Build S3 key with optional prefix for path-based routing (e.g., CloudFront origins)
+      const prefix = keyPrefix || '';
+      const objectPath = `${padId}/${randomUUID()}${safeExt}`;  // e.g., "myPad/abc123.pdf"
+      const key = `${prefix}${objectPath}`;                     // e.g., "uploads/myPad/abc123.pdf"
 
       const s3Client = new S3Client({ region }); // credentials from env / IAM role
 
@@ -170,8 +174,16 @@ exports.expressConfigure = (hookName, context) => {
 
       const signedUrl = await getSignedUrl(s3Client, putCommand, { expiresIn: expires || 600 });
 
-      const basePublic = publicURL || `https://${bucket}.s3.${region}.amazonaws.com/`;
-      const publicUrl = new url.URL(key, basePublic).toString();
+      // Build public URL:
+      // - If custom publicURL is set (e.g., CDN), it already includes the prefix path
+      // - If no publicURL, use direct S3 URL with full key
+      let publicUrl;
+      if (publicURL) {
+        publicUrl = new url.URL(objectPath, publicURL).toString();
+      } else {
+        const s3Base = `https://${bucket}.s3.${region}.amazonaws.com/`;
+        publicUrl = new url.URL(key, s3Base).toString();
+      }
 
       return res.json({ signedUrl, publicUrl });
     } catch (err) {
