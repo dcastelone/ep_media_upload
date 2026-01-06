@@ -4,6 +4,8 @@
 
 A lightweight Etherpad plugin that adds file upload capability via an S3 presigned URL workflow. Upon successful upload, a hyperlink is inserted into the document using the same format as `ep_hyperlinked_text`. NOTE: this currently REQUIRES ep_hyperlinked_text to work.
 
+**Key Security Feature:** Files are accessed through authenticated Etherpad endpoints, not direct S3 URLs. This allows S3 buckets to remain completely private while still enabling file downloads for authorized users.
+
 ---
 
 ## Features
@@ -18,9 +20,18 @@ A lightweight Etherpad plugin that adds file upload capability via an S3 presign
   1. Client requests presigned PUT URL from Etherpad server
   2. Server generates presigned URL using AWS SDK v3 (credentials from environment variables, not settings.json)
   3. Client uploads file directly to S3 (server never touches file)
-  4. On success, client inserts hyperlink into document
+  4. On success, client inserts hyperlink into document (pointing to authenticated download endpoint)
 - **No base64 or local storage options** – S3 only
 - **Scalable & secure**: Server only generates presigned URLs, no file handling
+
+### Secure Download Workflow
+- **Links point to authenticated Etherpad endpoint**, not direct S3 URLs
+- When user clicks a file link:
+  1. Request goes to `/p/:padId/pluginfw/ep_media_upload/download/:fileId`
+  2. Server verifies user has access to the pad
+  3. Server generates short-lived presigned GET URL (default 5 min)
+  4. User is redirected (302) to the presigned URL
+- **S3 bucket can be completely private** (Block Public Access enabled)
 
 ### File Restrictions
 - **Allowed file types**: Configurable via `settings.json` (array of extensions without dots)
@@ -29,7 +40,7 @@ A lightweight Etherpad plugin that adds file upload capability via an S3 presign
 ### Document Integration
 - On upload success, inserts a **hyperlink** into the document
 - **Link text**: Original filename (e.g., "quarterly-report.pdf")
-- **Link URL**: S3 public/CDN URL for direct download
+- **Link URL**: Relative URL to authenticated download endpoint (e.g., `/p/myPad/pluginfw/ep_media_upload/download/uuid.pdf`)
 - **Hyperlink format**: 100% compatible with `ep_hyperlinked_text` plugin
   - Uses `hyperlink` attribute with URL value
   - Renders as clickable `<a>` tag with `target="_blank"`
@@ -51,10 +62,10 @@ A lightweight Etherpad plugin that adds file upload capability via an S3 presign
   "storage": {
     "type": "s3_presigned",       // Only supported type
     "region": "us-east-1",        // AWS region
-    "bucket": "my-bucket-name",   // S3 bucket name
-    "keyPrefix": "uploads/",      // Optional S3 key prefix (for CloudFront path-based routing)
-    "publicURL": "https://cdn.example.com/uploads/",  // Optional CDN URL (should include prefix if using keyPrefix)
-    "expires": 900                // Presigned URL expiry in seconds (default 600)
+    "bucket": "my-bucket-name",   // S3 bucket name (can be private!)
+    "keyPrefix": "uploads/",      // Optional S3 key prefix
+    "expires": 900,               // Presigned PUT URL expiry in seconds (default 600)
+    "downloadExpires": 300        // Presigned GET URL expiry in seconds (default 300)
   },
   "fileTypes": ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "mp3", "mp4", "wav", "mov", "zip", "txt"],
   "maxFileSize": 52428800         // 50 MB in bytes
@@ -67,19 +78,19 @@ A lightweight Etherpad plugin that adds file upload capability via an S3 presign
 |--------|-------------|
 | `type` | Must be `"s3_presigned"` (only supported storage type) |
 | `region` | AWS region (e.g., `"us-east-1"`) |
-| `bucket` | S3 bucket name |
+| `bucket` | S3 bucket name (can have Block Public Access enabled) |
 | `keyPrefix` | Optional prefix for S3 keys (e.g., `"uploads/"` → keys become `uploads/padId/uuid.ext`) |
-| `publicURL` | Optional CDN/custom URL base. If using `keyPrefix`, include it in this URL. |
-| `expires` | Presigned URL expiry in seconds (default: 600) |
+| `expires` | Presigned PUT URL expiry in seconds for uploads (default: 600) |
+| `downloadExpires` | Presigned GET URL expiry in seconds for downloads (default: 300, shorter is more secure) |
 
-**Example with CloudFront path-based routing:**
+**Minimal secure configuration:**
 ```jsonc
 "storage": {
   "type": "s3_presigned",
   "region": "us-east-1",
-  "bucket": "my-bucket",
-  "keyPrefix": "uploads/",                              // S3 key: uploads/padId/uuid.pdf
-  "publicURL": "https://d123.cloudfront.net/uploads/"   // Public URL includes prefix
+  "bucket": "my-private-bucket",
+  "keyPrefix": "etherpad-uploads/",
+  "downloadExpires": 300          // 5 minute download links
 }
 ```
 
@@ -120,35 +131,71 @@ ep_media_upload/
 ### Server Hooks
 - `eejsBlock_editbarMenuLeft` – Inject toolbar button HTML
 - `eejsBlock_body` – Inject modal HTML
-- `expressConfigure` – Register `/p/:padId/pluginfw/ep_media_upload/s3_presign` endpoint
+- `expressConfigure` – Register endpoints:
+  - `/p/:padId/pluginfw/ep_media_upload/s3_presign` (upload presign)
+  - `/p/:padId/pluginfw/ep_media_upload/download/:fileId` (secure download)
 - `clientVars` – Pass config to client (fileTypes, maxFileSize, storageType)
 - `loadSettings` – Sync settings to runtime
 
 ---
 
-## Server Endpoint: Presign
+## Server Endpoints
 
-### Route
+### Upload Presign Endpoint
+
+**Route:**
 ```
 GET /p/:padId/pluginfw/ep_media_upload/s3_presign?name=<filename>&type=<mimetype>
 ```
 
-### Authentication
-- Validates session (cookie-based or express session)
-- Rate limiting: Max 30 requests per IP per minute (configurable)
+**Authentication:**
+- Validates session via SecurityManager (cookie-based or express session)
+- Rate limiting: Max 30 requests per IP per minute
 
-### Response
+**Response:**
 ```json
 {
-  "signedUrl": "https://bucket.s3.region.amazonaws.com/padId/uuid.ext?...",
-  "publicUrl": "https://cdn.example.com/padId/uuid.ext"
+  "signedUrl": "https://bucket.s3.region.amazonaws.com/key?X-Amz-Signature=...",
+  "downloadUrl": "/p/myPad/pluginfw/ep_media_upload/download/uuid.pdf",
+  "contentDisposition": "attachment; filename=\"report.pdf\""
 }
 ```
 
-### Security
+**Security:**
+- PadId validation (path traversal protection)
 - File extension validated against allowed `fileTypes`
-- Unique filename generated: `<padId>/<uuid>.<ext>`
-- MIME type passed to S3 for proper Content-Type header
+- MIME type validation (prevents spoofing)
+- Unique filename generated: `<keyPrefix><padId>/<uuid>.<ext>`
+
+---
+
+### Download Endpoint
+
+**Route:**
+```
+GET /p/:padId/pluginfw/ep_media_upload/download?file=<fileId>
+```
+
+**Parameters:**
+- `padId` - The pad ID (path parameter, validated for path traversal)
+- `file` - UUID-based filename with extension as query param (e.g., `?file=abc123-def456.pdf`)
+
+> **Note:** Using query parameter for the file ID ensures compatibility with both Express 4 and Express 5, as path parameters in Express 5 have stricter matching for file extensions.
+
+**Authentication:**
+- Validates session via SecurityManager (same as presign endpoint)
+- Verifies user has access to the specific pad
+- Rate limiting: Max 30 requests per IP per minute
+
+**Response:**
+- `302 Found` redirect to presigned S3 GET URL
+- Presigned URL expires after `downloadExpires` seconds (default 300)
+
+**Security:**
+- FileId validated to prevent path traversal
+- Pad access verification ensures only authorized users can download
+- Short-lived presigned URLs minimize exposure if links are leaked
+- Audit logging of all download requests
 
 ---
 
@@ -181,7 +228,7 @@ Uses the same mechanism as `ep_hyperlinked_text`:
 ```javascript
 // Insert text with hyperlink attribute
 const filename = file.name;  // e.g., "report.pdf"
-const url = publicUrl;       // e.g., "https://cdn.example.com/padId/abc123.pdf"
+const downloadUrl = "/p/myPad/pluginfw/ep_media_upload/download?file=abc123.pdf";
 
 // Insert filename text at cursor
 editorInfo.ace_replaceRange(cursorPos, cursorPos, filename);
@@ -190,18 +237,21 @@ editorInfo.ace_replaceRange(cursorPos, cursorPos, filename);
 docMan.setAttributesOnRange(
   [cursorPos[0], cursorPos[1]],
   [cursorPos[0], cursorPos[1] + filename.length],
-  [['hyperlink', url]]
+  [['hyperlink', downloadUrl]]
 );
 ```
 
 This ensures:
 - Full compatibility with ep_hyperlinked_text rendering
 - Clickable links that open in new tab
+- **Authenticated access** – links go through Etherpad, not direct to S3
 - Proper HTML export with `<a>` tags
 
 ---
 
 ## Error Handling
+
+### Upload Errors
 
 | Error | User Message |
 |-------|--------------|
@@ -210,6 +260,17 @@ This ensures:
 | Presign request failed | "Upload failed. Please try again." |
 | S3 upload failed | "Upload failed. Please try again." |
 | Network error | "Network error. Please check your connection." |
+
+### Download Errors
+
+| HTTP Status | Error | Description |
+|-------------|-------|-------------|
+| 400 | Invalid pad ID / file ID | Malformed or potentially malicious input |
+| 401 | Authentication required | No valid session cookies |
+| 403 | Access denied to this pad | User doesn't have access to the pad |
+| 404 | File not found | S3 object doesn't exist |
+| 429 | Too many download requests | Rate limit exceeded |
+| 500 | Failed to generate download URL | Server error |
 
 ---
 
@@ -224,29 +285,53 @@ This ensures:
 
 ## Security Considerations
 
-1. **No server-side file handling**: Files never touch the Etherpad server
-2. **Authentication required**: Presign endpoint validates session
-3. **Rate limiting**: Prevents presign endpoint abuse
-4. **File type allowlist**: Only configured extensions accepted
-5. **Unique filenames**: UUIDs prevent enumeration/overwrites
-6. **CORS on S3**: Bucket must allow PUT from pad origins
+1. **Private S3 bucket**: Bucket can have Block Public Access enabled – files are accessed via authenticated endpoints
+2. **No server-side file handling**: Files never touch the Etherpad server (upload/download via presigned URLs)
+3. **Authentication required**: Both upload and download endpoints validate session via SecurityManager
+4. **Pad access verification**: Download endpoint verifies user has access to the specific pad containing the file
+5. **Short-lived download URLs**: Presigned GET URLs expire quickly (default 5 min) – leaked links become invalid
+6. **Rate limiting**: Prevents abuse of both presign and download endpoints (30 req/IP/min)
+7. **File type allowlist**: Only configured extensions accepted for upload
+8. **Input validation**: PadId and FileId validated to prevent path traversal attacks
+9. **Unique filenames**: UUIDs prevent enumeration/overwrites
+10. **Audit logging**: All uploads and downloads are logged with user/pad/file info
+11. **CORS on S3**: Bucket must allow PUT from pad origins (for uploads only)
 
 ---
 
-## S3 Bucket CORS Configuration
+## S3 Bucket Configuration
 
-Required CORS policy for the S3 bucket:
+### Block Public Access (Recommended)
+
+Since downloads go through the authenticated Etherpad endpoint, you can enable all Block Public Access settings:
+
+1. Go to S3 bucket → Permissions → Block public access
+2. Enable all four settings:
+   - Block public access to buckets and objects granted through new ACLs
+   - Block public access to buckets and objects granted through any ACLs
+   - Block public access to buckets and objects granted through new public bucket policies
+   - Block public and cross-account access to buckets and objects through any public bucket policies
+
+### CORS Configuration
+
+CORS is only needed for client-side uploads (PUT requests):
 
 ```json
 [
   {
     "AllowedOrigins": ["https://your-etherpad-domain.com"],
     "AllowedMethods": ["PUT"],
-    "AllowedHeaders": ["Content-Type"],
+    "AllowedHeaders": ["Content-Type", "Content-Disposition"],
     "MaxAgeSeconds": 3000
   }
 ]
 ```
+
+### IAM Permissions
+
+The IAM credentials need only:
+- `s3:PutObject` (for uploads)
+- `s3:GetObject` (for generating presigned download URLs)
 
 ---
 

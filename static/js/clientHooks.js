@@ -78,6 +78,7 @@ const validateFile = (file) => {
 
 /**
  * Upload file to S3 using presigned URL
+ * Returns the secure download URL (relative path to our authenticated endpoint)
  */
 const uploadToS3 = async (file) => {
   // Step 1: Get presigned URL from server
@@ -86,7 +87,7 @@ const uploadToS3 = async (file) => {
     `${encodeURIComponent(clientVars.padId)}/pluginfw/ep_media_upload/s3_presign?${queryParams}`
   );
 
-  if (!presignResponse || !presignResponse.signedUrl || !presignResponse.publicUrl) {
+  if (!presignResponse || !presignResponse.signedUrl || !presignResponse.downloadUrl) {
     throw new Error('Invalid presign response from server');
   }
 
@@ -107,7 +108,8 @@ const uploadToS3 = async (file) => {
     throw new Error(`S3 upload failed with status ${uploadResponse.status}`);
   }
 
-  return presignResponse.publicUrl;
+  // Return the secure download URL (authenticated endpoint, not direct S3)
+  return presignResponse.downloadUrl;
 };
 
 /**
@@ -159,12 +161,12 @@ const handleFileUpload = async (file, aceContext) => {
   showModal('progress');
 
   try {
-    // Upload to S3
-    const publicUrl = await uploadToS3(file);
+    // Upload to S3 and get secure download URL
+    const downloadUrl = await uploadToS3(file);
 
-    // Insert hyperlink into document
+    // Insert hyperlink into document (uses authenticated download endpoint)
     aceContext.callWithAce((ace) => {
-      ace.ace_doInsertMediaLink(publicUrl, file.name);
+      ace.ace_doInsertMediaLink(downloadUrl, file.name);
     }, 'insertMediaLink', true);
 
     // Hide modal on success (no success message needed)

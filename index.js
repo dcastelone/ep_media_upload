@@ -17,9 +17,9 @@ try {
 }
 
 // AWS SDK v3 for presigned URLs
-let S3Client, PutObjectCommand, getSignedUrl;
+let S3Client, PutObjectCommand, GetObjectCommand, getSignedUrl;
 try {
-  ({ S3Client, PutObjectCommand } = require('@aws-sdk/client-s3'));
+  ({ S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3'));
   ({ getSignedUrl } = require('@aws-sdk/s3-request-presigner'));
 } catch (e) {
   console.warn('[ep_media_upload] AWS SDK not installed; s3_presigned storage will not work.');
@@ -172,6 +172,24 @@ const isValidMimeForExtension = (extension, mimeType) => {
   return allowedMimes.some(allowed => allowed === normalizedMime);
 };
 
+/**
+ * Validate file ID for download endpoint.
+ * File ID format: UUID (with hyphens) + dot + extension
+ * Example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf"
+ * Returns true if valid, false if invalid.
+ */
+const isValidFileId = (fileId) => {
+  if (!fileId || typeof fileId !== 'string') return false;
+  if (fileId.length > 100) return false; // UUID (36) + dot (1) + extension (max ~10)
+  // Reject path traversal and dangerous characters
+  if (fileId.includes('..') || fileId.includes('/') || fileId.includes('\\')) return false;
+  if (fileId.includes('\0')) return false;
+  // Must match: UUID format (with hyphens) + dot + alphanumeric extension
+  // UUID: 8-4-4-4-12 hex chars with hyphens = 36 chars
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.[a-z0-9]+$/i.test(fileId)) return false;
+  return true;
+};
+
 // ============================================================================
 // Hooks
 // ============================================================================
@@ -240,10 +258,10 @@ exports.eejsBlock_body = (hookName, args, cb) => {
 };
 
 /**
- * expressConfigure hook
- * Register the S3 presign endpoint
+ * expressCreateServer hook
+ * Register the S3 presign and download endpoints
  */
-exports.expressConfigure = (hookName, context) => {
+exports.expressCreateServer = (hookName, context) => {
   logger.info('[ep_media_upload] Registering presign endpoint');
 
   // Route: GET /p/:padId/pluginfw/ep_media_upload/s3_presign
@@ -351,28 +369,125 @@ exports.expressConfigure = (hookName, context) => {
 
       const signedUrl = await getSignedUrl(s3Client, putCommand, { expiresIn: expires || 600 });
 
-      // Build public URL:
-      // - If custom publicURL is set (e.g., CDN), it already includes the prefix path
-      // - If no publicURL, use direct S3 URL with full key
-      let publicUrl;
-      if (publicURL) {
-        publicUrl = new url.URL(objectPath, publicURL).toString();
-      } else {
-        const s3Base = `https://${bucket}.s3.${region}.amazonaws.com/`;
-        publicUrl = new url.URL(key, s3Base).toString();
-      }
+      // Build secure download URL (relative path that goes through our auth-protected endpoint)
+      // Using query parameter for fileId to ensure Express 4/5 compatibility (path params don't handle dots well in Express 5)
+      const fileId = path.basename(key); // e.g., "abc123-def456.pdf"
+      const downloadUrl = `/p/${encodeURIComponent(padId)}/pluginfw/ep_media_upload/download?file=${encodeURIComponent(fileId)}`;
 
       // Log upload request for audit trail
       // Note: Never log tokens or session cookies - only non-sensitive identifiers
       const userId = req.session?.user?.username || req.session?.authorId || 'anonymous';
       logger.info(`[ep_media_upload] UPLOAD: user="${userId}" pad="${padId}" file="${originalFilename}" s3key="${key}"`);
 
-      // Return contentDisposition so client can include it in the PUT request
-      // (required because it's part of the presigned URL signature)
-      return res.json({ signedUrl, publicUrl, contentDisposition });
+      // Return downloadUrl for hyperlink insertion (authenticated download endpoint)
+      // Also return signedUrl for the actual S3 upload and contentDisposition for PUT headers
+      return res.json({ signedUrl, downloadUrl, contentDisposition });
     } catch (err) {
       logger.error('[ep_media_upload] S3 presign error', err);
       return res.status(500).json({ error: 'Failed to generate presigned URL' });
+    }
+  });
+
+  // ============================================================================
+  // Download Endpoint - Secure file access via presigned GET URL redirect
+  // ============================================================================
+  // Route: GET /p/:padId/pluginfw/ep_media_upload/download?file=<fileId>
+  // Using query parameter for fileId to ensure Express 4/5 compatibility
+  logger.info('[ep_media_upload] Registering download endpoint');
+
+  context.app.get('/p/:padId/pluginfw/ep_media_upload/download', async (req, res) => {
+    const { padId } = req.params;
+    const fileId = req.query.file;
+
+    /* ------------------ Validate padId ------------------ */
+    if (!isValidPadId(padId)) {
+      return res.status(400).json({ error: 'Invalid pad ID' });
+    }
+
+    /* ------------------ Validate fileId ------------------ */
+    if (!isValidFileId(fileId)) {
+      return res.status(400).json({ error: 'Invalid file ID' });
+    }
+
+    /* ------------------ Pad Access Verification ------------------ */
+    // Use Etherpad's SecurityManager to verify user has access to this pad
+    if (securityManager) {
+      try {
+        const sessionCookie = req.cookies?.sessionID || null;
+        const token = req.cookies?.token || null;
+        const user = req.session?.user || null;
+
+        const accessResult = await securityManager.checkAccess(padId, sessionCookie, token, user);
+        if (accessResult.accessStatus !== 'grant') {
+          return res.status(403).json({ error: 'Access denied to this pad' });
+        }
+      } catch (authErr) {
+        logger.error('[ep_media_upload] Download access check error:', authErr);
+        return res.status(500).json({ error: 'Access verification failed' });
+      }
+    } else {
+      // Fallback: basic cookie check if SecurityManager unavailable
+      const hasExpressSession = req.session && (req.session.user || req.session.authorId);
+      const hasPadCookie = req.cookies && (req.cookies.sessionID || req.cookies.token);
+      if (!hasExpressSession && !hasPadCookie) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+    }
+
+    /* ------------------ Rate limiting --------------------- */
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || 'unknown';
+    if (!_rateLimitCheck(ip)) {
+      return res.status(429).json({ error: 'Too many download requests' });
+    }
+
+    try {
+      const storageCfg = settings.ep_media_upload && settings.ep_media_upload.storage;
+      if (!storageCfg || storageCfg.type !== 's3_presigned') {
+        return res.status(400).json({ error: 's3_presigned storage not configured' });
+      }
+
+      if (!S3Client || !GetObjectCommand || !getSignedUrl) {
+        return res.status(500).json({ error: 'AWS SDK not available on server' });
+      }
+
+      const { bucket, region, keyPrefix, downloadExpires } = storageCfg;
+      if (!bucket || !region) {
+        return res.status(500).json({ error: 'Invalid S3 configuration: missing bucket or region' });
+      }
+
+      // Construct S3 key from padId and fileId
+      // Key format: keyPrefix + padId + "/" + fileId
+      // e.g., "uploads/myPad/abc123-def456.pdf"
+      const prefix = keyPrefix || '';
+      const key = `${prefix}${padId}/${fileId}`;
+
+      // Generate presigned GET URL with short expiry
+      const s3Client = new S3Client({ region });
+      const getCommand = new GetObjectCommand({
+        Bucket: bucket,
+        Key: key,
+      });
+
+      // Use downloadExpires from config, default to 300 seconds (5 minutes)
+      const expiresIn = downloadExpires || 300;
+      const presignedGetUrl = await getSignedUrl(s3Client, getCommand, { expiresIn });
+
+      // Log download request for audit trail
+      const userId = req.session?.user?.username || req.session?.authorId || 'anonymous';
+      logger.info(`[ep_media_upload] DOWNLOAD: user="${userId}" pad="${padId}" file="${fileId}"`);
+
+      // Redirect to the presigned URL
+      return res.redirect(302, presignedGetUrl);
+
+    } catch (err) {
+      logger.error('[ep_media_upload] Download presign error:', err);
+      
+      // Check if this is a "NoSuchKey" error (file doesn't exist in S3)
+      if (err.name === 'NoSuchKey' || err.Code === 'NoSuchKey') {
+        return res.status(404).json({ error: 'File not found' });
+      }
+      
+      return res.status(500).json({ error: 'Failed to generate download URL' });
     }
   });
 };
