@@ -27,8 +27,9 @@ Etherpad plugin for secure file uploads via S3 presigned URLs.
     "expires": 900,
     "downloadExpires": 300
   },
-  "fileTypes": ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "zip"],
-  "maxFileSize": 52428800
+  "fileTypes": ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "zip", "mp3", "mp4", "wav", "mov"],
+  "maxFileSize": 52428800,
+  "inlineExtensions": ["mp3", "mp4", "wav", "mov", "webm", "ogg"]
 }
 ```
 
@@ -49,6 +50,7 @@ Etherpad plugin for secure file uploads via S3 presigned URLs.
 |--------|----------|---------|-------------|
 | `fileTypes` | No | all | Array of allowed extensions (without dots) |
 | `maxFileSize` | No | unlimited | Max file size in bytes |
+| `inlineExtensions` | No | `[]` | Extensions to open inline in browser (streaming). Files not in this list will download. |
 
 ### Environment Variables
 

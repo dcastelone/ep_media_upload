@@ -133,7 +133,7 @@ const EXTENSION_MIME_MAP = {
   
   // Audio
   mp3: ['audio/mpeg', 'audio/mp3'],
-  wav: ['audio/wav', 'audio/wave', 'audio/x-wav'],
+  wav: ['audio/wav', 'audio/wave', 'audio/x-wav', 'audio/vnd.wave'],
   ogg: ['audio/ogg'],
   m4a: ['audio/mp4', 'audio/x-m4a'],
   flac: ['audio/flac'],
@@ -467,11 +467,30 @@ exports.expressCreateServer = (hookName, context) => {
       const prefix = keyPrefix || '';
       const key = `${prefix}${padId}/${fileId}`;
 
+      // Extract file extension to determine inline vs attachment disposition
+      const fileExtension = getValidExtension(fileId);
+      
+      // Get inlineExtensions from config (extensions that should open in browser)
+      // Default behavior is download (attachment) for all files
+      const inlineExtensions = settings.ep_media_upload?.inlineExtensions || [];
+      const shouldOpenInline = fileExtension && 
+        Array.isArray(inlineExtensions) && 
+        inlineExtensions.map(e => e.toLowerCase()).includes(fileExtension.toLowerCase());
+
+      // Determine Content-Disposition based on extension config
+      // Extract filename for Content-Disposition header (UUID.ext -> use as filename)
+      const filename = fileId.replace(/[^\w\-_.]/g, '_'); // Sanitize for header
+      const disposition = shouldOpenInline 
+        ? `inline; filename="${filename}"` 
+        : `attachment; filename="${filename}"`;
+
       // Generate presigned GET URL with short expiry
+      // Use ResponseContentDisposition to override the stored header
       const s3Client = new S3Client({ region });
       const getCommand = new GetObjectCommand({
         Bucket: bucket,
         Key: key,
+        ResponseContentDisposition: disposition,
       });
 
       // Use downloadExpires from config, default to 300 seconds (5 minutes)
@@ -480,7 +499,8 @@ exports.expressCreateServer = (hookName, context) => {
 
       // Log download request for audit trail
       const username = req.session?.user?.username || 'anonymous';
-      logger.info(`[ep_media_upload] DOWNLOAD: author="${authorId}" user="${username}" ip="${clientIp}" pad="${padId}" file="${fileId}"`);
+      const dispositionType = shouldOpenInline ? 'inline' : 'attachment';
+      logger.info(`[ep_media_upload] DOWNLOAD: author="${authorId}" user="${username}" ip="${clientIp}" pad="${padId}" file="${fileId}" disposition="${dispositionType}"`);
 
       // Redirect to the presigned URL
       return res.redirect(302, presignedGetUrl);
