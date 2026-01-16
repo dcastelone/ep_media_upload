@@ -484,14 +484,33 @@ exports.expressCreateServer = (hookName, context) => {
         ? `inline; filename="${filename}"` 
         : `attachment; filename="${filename}"`;
 
+      // Map extensions to canonical MIME types for consistent browser playback
+      const EXTENSION_CONTENT_TYPE = {
+        mp3: 'audio/mpeg',
+        wav: 'audio/wav',
+        mp4: 'video/mp4',
+        mov: 'video/quicktime',
+        webm: 'video/webm',
+        ogg: 'audio/ogg',
+        m4a: 'audio/mp4',
+        pdf: 'application/pdf',
+      };
+
       // Generate presigned GET URL with short expiry
-      // Use ResponseContentDisposition to override the stored header
+      // Use ResponseContentDisposition and ResponseContentType to override stored headers
       const s3Client = new S3Client({ region });
-      const getCommand = new GetObjectCommand({
+      const commandParams = {
         Bucket: bucket,
         Key: key,
         ResponseContentDisposition: disposition,
-      });
+      };
+
+      // Set canonical Content-Type for inline extensions to ensure browser compatibility
+      if (shouldOpenInline && fileExtension && EXTENSION_CONTENT_TYPE[fileExtension.toLowerCase()]) {
+        commandParams.ResponseContentType = EXTENSION_CONTENT_TYPE[fileExtension.toLowerCase()];
+      }
+
+      const getCommand = new GetObjectCommand(commandParams);
 
       // Use downloadExpires from config, default to 300 seconds (5 minutes)
       const expiresIn = downloadExpires || 300;
