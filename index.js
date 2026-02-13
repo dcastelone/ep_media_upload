@@ -17,9 +17,9 @@ try {
 }
 
 // AWS SDK v3 for presigned URLs
-let S3Client, PutObjectCommand, GetObjectCommand, getSignedUrl;
+let S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, getSignedUrl;
 try {
-  ({ S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3'));
+  ({ S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3'));
   ({ getSignedUrl } = require('@aws-sdk/s3-request-presigner'));
 } catch (e) {
   console.warn('[ep_media_upload] AWS SDK not installed; s3_presigned storage will not work.');
@@ -477,9 +477,33 @@ exports.expressCreateServer = (hookName, context) => {
         Array.isArray(inlineExtensions) && 
         inlineExtensions.map(e => e.toLowerCase()).includes(fileExtension.toLowerCase());
 
+      // Try to retrieve original filename from S3 object metadata
+      // The original filename was stored in Content-Disposition during upload
+      const s3Client = new S3Client({ region });
+      let filename = fileId.replace(/[^\w\-_.]/g, '_'); // Default fallback to UUID-based name
+
+      try {
+        const headCommand = new HeadObjectCommand({ Bucket: bucket, Key: key });
+        const headResponse = await s3Client.send(headCommand);
+        
+        // Parse original filename from stored Content-Disposition header
+        // Format: attachment; filename="original-name.pdf"
+        if (headResponse.ContentDisposition) {
+          const match = headResponse.ContentDisposition.match(/filename="([^"]+)"/);
+          if (match && match[1]) {
+            // Use the original filename, sanitize it for safety
+            filename = match[1].replace(/[^\w\-_.]/g, '_');
+          }
+        }
+      } catch (headErr) {
+        // If HeadObject fails (e.g., file doesn't exist), we'll catch it later
+        // or use the fallback filename. Log for debugging but don't fail yet.
+        if (headErr.name !== 'NotFound' && headErr.Code !== 'NoSuchKey') {
+          logger.warn(`[ep_media_upload] HeadObject warning for key="${key}": ${headErr.message}`);
+        }
+      }
+
       // Determine Content-Disposition based on extension config
-      // Extract filename for Content-Disposition header (UUID.ext -> use as filename)
-      const filename = fileId.replace(/[^\w\-_.]/g, '_'); // Sanitize for header
       const disposition = shouldOpenInline 
         ? `inline; filename="${filename}"` 
         : `attachment; filename="${filename}"`;
@@ -498,7 +522,6 @@ exports.expressCreateServer = (hookName, context) => {
 
       // Generate presigned GET URL with short expiry
       // Use ResponseContentDisposition and ResponseContentType to override stored headers
-      const s3Client = new S3Client({ region });
       const commandParams = {
         Bucket: bucket,
         Key: key,
