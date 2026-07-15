@@ -6,12 +6,16 @@ Etherpad plugin for secure file uploads via S3 presigned URLs.
 
 ## How It Works
 
-1. User clicks paperclip button → selects file
+1. User clicks the upload-folder button → selects file
 2. Client uploads directly to S3 (server never handles file data)
 3. Hyperlink inserted into document pointing to secure download endpoint
 4. On click, Etherpad verifies access and redirects to short-lived S3 URL
 
 **S3 bucket can be completely private** – downloads go through authenticated Etherpad endpoint.
+
+## Export support
+
+This plugin does not register Etherpad export hooks. It inserts ordinary hyperlink attributes through `ep_hyperlinked_text`; the uploaded file itself is not embedded into generated HTML or document exports.
 
 ## Configuration
 

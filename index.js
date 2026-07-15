@@ -190,6 +190,12 @@ const isValidFileId = (fileId) => {
   return true;
 };
 
+// Keep validation contracts directly testable without exporting runtime state,
+// AWS clients, credentials, or registered routes.
+Object.defineProperty(exports, '__testValidation', {
+  value: {getValidExtension, isValidFileId, isValidMimeForExtension, isValidPadId},
+});
+
 // ============================================================================
 // Hooks
 // ============================================================================
